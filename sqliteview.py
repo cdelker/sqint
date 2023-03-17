@@ -5,7 +5,7 @@ import sys
 import sqlite3
 
 from textual.app import App, ComposeResult
-from textual.widgets import DirectoryTree, DataTable, Input, Button, Tree, Header, Label, Footer, ContentSwitcher
+from textual.widgets import DirectoryTree, DataTable, Input, Button, Tree, Header, Label, Footer, ContentSwitcher, Tab, Tabs
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
@@ -113,10 +113,11 @@ class SqliteViewer(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DbTreeWidget('database', id='dbtree')
-        with Horizontal(id='buttons'):
-            yield Button('Contents', id='dbtable_button')
-            yield Button('Table Info', id='infotable_button')
-            yield Button('Query', id='query_button')
+        yield Tabs(
+            Tab('Contents', id='dbtable_tab'),
+            Tab('Table Info', id='infotable_tab'),
+            Tab('Query', id='query_tab')
+        )
 
         with ContentSwitcher(initial='dbtable'):
             yield DataTable(id='dbtable')
@@ -146,11 +147,11 @@ class SqliteViewer(App):
             if contentswitcher.current == 'query':
                 contentswitcher.current = 'dbtable'
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        ''' A button was pressed, switch the content '''
-        tableid = event.button.id.split('_')[0]
-        self.query_one(ContentSwitcher).current = tableid
-
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        ''' Tab was changed '''
+        tabid = event.tab.id.split('_')[0]
+        self.query_one(ContentSwitcher).current = tabid
+        
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
         table = self.query_one('#queryoutput')

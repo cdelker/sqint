@@ -3,11 +3,6 @@ Screen {
     overflow-x: auto;
 }
 
-#buttons {
-    height: 3;
-    width: auto;
-}
-
 Button {
     margin-right: 1;
     margin-left: 1;
@@ -17,7 +12,7 @@ ContentSwitcher {
     background: $panel;
     border: round $primary;
     width: 100%;
-    height: 80%;
+    height: 90%;
 }
 
 #dbtree {
