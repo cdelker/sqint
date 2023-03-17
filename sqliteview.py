@@ -4,7 +4,7 @@ import os
 import sys
 import sqlite3
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, NoMatches
 from textual.widgets import DirectoryTree, DataTable, Input, Button, Tree, Header, Label, Footer, ContentSwitcher, Tab, Tabs
 from textual.screen import Screen
 from textual.containers import Horizontal, Vertical
@@ -150,8 +150,11 @@ class SqliteViewer(App):
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         ''' Tab was changed '''
         tabid = event.tab.id.split('_')[0]
-        self.query_one(ContentSwitcher).current = tabid
-        
+        try:
+            self.query_one(ContentSwitcher).current = tabid
+        except NoMatches:
+            pass  # ContentSwitcher won't exist yet during initialization
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
         table = self.query_one('#queryoutput')
