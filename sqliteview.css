@@ -1,6 +1,7 @@
 Screen {
     align: center middle;
     overflow-x: auto;
+    layers: bottom top;
 }
 
 Button {
@@ -45,5 +46,14 @@ DataTable {
     padding-right: 2;
     background: $error;
     color: white;
+    visibility: hidden;
+}
+
+#fieldedit {
+    width: 70%;
+    height: 40%;
+    align: center middle;
+    layer: top;
+    border: solid;
     visibility: hidden;
 }
