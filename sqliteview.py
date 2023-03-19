@@ -3,6 +3,7 @@
 import os
 import sys
 import sqlite3
+from collections import namedtuple
 from typing import Sequence
 
 from textual import events
@@ -25,6 +26,9 @@ from textual.screen import Screen
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.coordinate import Coordinate
+
+
+TableEditInfo = namedtuple('TableEditInfo', 'value column tablename conditions coordinate')
 
 
 class Database:
@@ -70,7 +74,7 @@ class Database:
     def table_data(self, name: str) -> tuple[list[str], list[list[str]]]:
         ''' Get column names and row data from table '''
         primary_keys = self.primary_keys(name)
-        if primary_keys[0] == 'rowid':
+        if not name in self.views and primary_keys[0] == 'rowid':
             columns, rows = self.query(f'SELECT rowid, * FROM {name}')
         else:
             columns, rows = self.query(f'SELECT * FROM {name}')
@@ -80,10 +84,10 @@ class Database:
         ''' Get primary key columns for a table '''
         _, rows = self.query(
             f'SELECT l.name FROM pragma_table_info("{name}") as l WHERE l.pk = 1;')
-        rows = [r[0] for r in rows]
-        if not rows:
-            rows = ['rowid']
-        return rows
+        rowstrs = [r[0] for r in rows]
+        if not rowstrs:
+            rowstrs = ['rowid']
+        return rowstrs
 
     def update(self, tablename: str, colunmname: str, value: str, where: dict = None) -> None:
         ''' Update a single field in the database '''
@@ -140,49 +144,26 @@ class DbTreeWidget(Tree):
 
 class DbTableEdit(DataTable):
     ''' DataTable for showing and editing an SQLite table '''
+    BINDINGS = [Binding('enter', 'edit_field', 'Edit Field'),
+                Binding('i', 'insert_row', 'Insert Row')]
 
-    class StartEdit(Message):
-        ''' Message sent when a field edit was requested '''
-        def __init__(self,
-                     table_name: str,
-                     column_name: str,
-                     coordinate: Coordinate,
-                     current_value: str,
-                     where: dict) -> None:
-            self.table_name = table_name
-            self.column_name = column_name
-            self.coordinate = coordinate
-            self.current_value = current_value
-            self.where = where
-            super().__init__()
+    @property
+    def current_column(self) -> str:
+        ''' Get label for selected column '''
+        column_labels = [str(c.label) for c in self.ordered_columns]
+        return column_labels[self.cursor_column]
 
-    def fill_table(self,
-                   tablename: str,
-                   primary_keys: Sequence[str],
-                   columns: Sequence[str],
-                   rows: Sequence[Sequence[str]]) -> None:
-        ''' Populate the table with data '''
-        self.tablename = tablename
-        self.primary_keys = primary_keys
-        self.clear(columns=True)
-        self.add_columns(*columns)
-        self.add_rows(rows)
+    @property
+    def current_value(self) -> str:
+        ''' Get value of selected cell '''
+        return self.get_cell_at(self.cursor_coordinate)
 
-    def on_key(self, event: events.Key) -> None:
-        ''' A key was pressed. '''
-        if event.key == 'enter':
-            coordinate = Coordinate(self.cursor_row, self.cursor_column)
-            currentvalue = self.get_cell_at(coordinate)
-
-            column_labels = [str(c.label) for c in self.ordered_columns]
-            selectedcol = column_labels[self.cursor_column]
-
-            primary_key_ids = [column_labels.index(pk) for pk in self.primary_keys]
-            primary_key_values = [
-                self.get_cell_at(Coordinate(self.cursor_row, i)) for i in primary_key_ids]
-            conditions = dict(zip(self.primary_keys, primary_key_values))
-            self.post_message(
-                self.StartEdit(self.tablename, selectedcol, coordinate, currentvalue, conditions))
+    def current_row_values(self, *columns: str) -> dict:
+        ''' Get values of columns for selected row '''
+        column_labels = [str(c.label) for c in self.ordered_columns]
+        colids = [column_labels.index(c) for c in columns]
+        col_values = [self.get_cell_at(Coordinate(self.cursor_row, i)) for i in colids]
+        return dict(zip(columns, col_values))
 
 
 class FieldEditor(Static):
@@ -190,9 +171,9 @@ class FieldEditor(Static):
 
     class ChangeField(Message):
         ''' Message to notify that the field should be changed '''
-        def __init__(self, new_value: str, table_info: DbTableEdit.StartEdit):
-            self.new_value = new_value
-            self.table_info = table_info
+        def __init__(self, newvalue: str, changeinfo: TableEditInfo):
+            self.newvalue = newvalue
+            self.changeinfo = changeinfo
             super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -202,21 +183,21 @@ class FieldEditor(Static):
             yield Button('Commit', id='commit')
             yield Button('Cancel', id='cancel')
 
-    def startedit(self, message: DbTableEdit.StartEdit) -> None:
+    def startedit(self, editinfo: TableEditInfo) -> None:
         ''' Start editing the field '''
-        self.table_info = message
+        self.editinfo = editinfo
         self.styles.visibility = 'visible'
         fieldname = self.query_one('#fieldname', Label)
-        fieldname.update(message.column_name)
+        fieldname.update(editinfo.column)
         value = self.query_one('#fieldinput', Input)
         value.action_end()
         value.action_delete_left_all()
-        value.insert_text_at_cursor(message.current_value)
+        value.insert_text_at_cursor(editinfo.value)
         value.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' Enter was pressed in the Input. Commit the change. '''
-        self.post_message(self.ChangeField(event.value, self.table_info))
+        self.post_message(self.ChangeField(event.value, self.editinfo))
         self.styles.visibility = 'hidden'
         event.stop()
 
@@ -225,8 +206,8 @@ class FieldEditor(Static):
         if event.button.id == 'cancel':
             self.styles.visibility = 'hidden'
         else:
-            value = self.query_one('#fieldinput', Input)
-            self.post_message(self.ChangeField(value.value, self.table_info))
+            value = self.query_one('#fieldinput', Input).value
+            self.post_message(self.ChangeField(value, self.editinfo))
             self.styles.visibility = 'hidden'
 
     def on_key(self, event: events.Key) -> None:
@@ -246,6 +227,7 @@ class SqliteViewer(App):
         super().__init__()
         self.database = Database()
         self.dbpath = dbpath
+        self.currenttable = None
 
     def on_mount(self) -> None:
         ''' Load the database when mounted '''
@@ -281,10 +263,12 @@ class SqliteViewer(App):
     def on_tree_node_selected(self, message: Tree.NodeSelected) -> None:
         ''' Something was selected in the Database Tree '''
         if not message.node.allow_expand:
-            tablename = str(message.node.label)
-            columns, rows = self.database.table_data(tablename)
+            self.currenttable = str(message.node.label)
+            columns, rows = self.database.table_data(self.currenttable)
             table = self.query_one('#dbtable', DbTableEdit)
-            table.fill_table(tablename, self.database.primary_keys(tablename), columns, rows)
+            table.clear(columns=True)
+            table.add_columns(*columns)
+            table.add_rows(rows)
 
             infotable = self.query_one('#infotable', DataTable)
             infotable.clear(columns=True)
@@ -305,22 +289,35 @@ class SqliteViewer(App):
             except NoMatches:
                 pass  # ContentSwitcher won't exist yet during initialization
 
-    def on_db_table_edit_start_edit(self, message: DbTableEdit.StartEdit) -> None:
-        ''' Database Table wants to start editing a field '''
-        editbox = self.query_one('#fieldedit', FieldEditor)
-        editbox.startedit(message)
+    def action_edit_field(self):
+        ''' Edit of the field was requested. Show edit popup. '''
+        if self.currenttable and self.currenttable not in self.database.views:
+            table = self.query_one('#dbtable', DbTableEdit)
+            primary_keys = self.database.primary_keys(self.currenttable)
+            conditions = table.current_row_values(*primary_keys)
+            tableinfo = TableEditInfo(table.current_value,
+                                      table.current_column,
+                                      self.currenttable,
+                                      conditions,
+                                      table.cursor_coordinate)
+            editbox = self.query_one('#fieldedit', FieldEditor)
+            editbox.startedit(tableinfo)
 
     def on_field_editor_change_field(self, message: FieldEditor.ChangeField) -> None:
         ''' Field editor is done editing '''
-        where = message.table_info.where
-        table_name = message.table_info.table_name
-        column_name = message.table_info.column_name
-        coordinate = message.table_info.coordinate
-        new_value = message.new_value
+        where = message.changeinfo.conditions
+        table_name = message.changeinfo.tablename
+        column_name = message.changeinfo.column
+        coordinate = message.changeinfo.coordinate
+        new_value = message.newvalue
         table = self.query_one('#dbtable', DbTableEdit)
-        table.update_cell_at(coordinate, new_value)
+        try:
+            self.database.update(table_name, column_name, new_value, where)
+        except sqlite3.Error:
+            pass  # TODO: show error message
+        else:
+            table.update_cell_at(coordinate, new_value, update_width=True)
         table.focus()
-        self.database.update(table_name, column_name, new_value, where)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
