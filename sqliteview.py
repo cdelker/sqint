@@ -23,7 +23,7 @@ from textual.widgets import (Button,
                              Tree,
                              Static)
 from textual.screen import Screen
-from textual.containers import Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
 from textual.coordinate import Coordinate
 
@@ -100,6 +100,12 @@ class Database:
         self.connection.execute(sql, args)
         self.connection.commit()
 
+    def insert(self, tablename: str, values: dict[str, str]) -> None:
+        colstr = ','.join(values.keys())
+        qs = ','.join('?'*len(values))
+        sql = f'INSERT INTO {tablename} ({colstr}) VALUES({qs})'
+        self.connection.execute(sql, list(values.values()))
+        self.connection.commit()
 
 class OpenDb(Screen):
     ''' Screen for selecting a database file '''
@@ -114,9 +120,7 @@ class OpenDb(Screen):
     def compose(self) -> ComposeResult:
         yield Label('Select Database to Open', id='openlabel')
         yield DirectoryTree(os.path.expanduser('~'), id='opentree')
-        with Horizontal():
-            yield Button('Open', id='openbutton')
-            yield Label('Not a database', id='notadatabase')
+        yield Button('Open', id='openbutton')
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         ''' The Open button was pressed '''
@@ -148,10 +152,14 @@ class DbTableEdit(DataTable):
                 Binding('i', 'insert_row', 'Insert Row')]
 
     @property
+    def column_names(self) -> list[str]:
+        ''' Get list of column names '''
+        return [str(c.label) for c in self.ordered_columns]
+
+    @property
     def current_column(self) -> str:
         ''' Get label for selected column '''
-        column_labels = [str(c.label) for c in self.ordered_columns]
-        return column_labels[self.cursor_column]
+        return self.column_names[self.cursor_column]
 
     @property
     def current_value(self) -> str:
@@ -160,7 +168,9 @@ class DbTableEdit(DataTable):
 
     def current_row_values(self, *columns: str) -> dict:
         ''' Get values of columns for selected row '''
-        column_labels = [str(c.label) for c in self.ordered_columns]
+        column_labels = tuple(self.column_names)
+        if len(columns) == 0:
+            columns = column_labels
         colids = [column_labels.index(c) for c in columns]
         col_values = [self.get_cell_at(Coordinate(self.cursor_row, i)) for i in colids]
         return dict(zip(columns, col_values))
@@ -216,10 +226,85 @@ class FieldEditor(Static):
             self.styles.visibility = 'hidden'
 
 
+class InsertEditor(Static):
+    ''' Screen for inserting an entire row into a table '''
+
+    class InsertRow(Message):
+        ''' Message to notify that a row should be inserted '''
+        def __init__(self, tablename: str, values: dict[str, str]):
+            self.values = values
+            self.tablename = tablename
+            super().__init__()
+
+    class RowEdit(Static):
+        ''' Label and Input Widgets '''
+        def __init__(self, label: str, value: str):
+            super().__init__()
+            self.label = label
+            self.initialvalue = value
+
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield Label(self.label, id='roweditlabel')
+                yield Input(self.initialvalue, id='roweditvalue')
+
+        @property
+        def value(self):
+            ''' Get entered value as a string '''
+            inpt = self.query_one('#value', Input)
+            return str(inpt.value)
+
+    def compose(self) -> ComposeResult:
+        yield Label('Table Name', id='tablename')
+        yield Container(id='widgetcontainer')
+        with Horizontal():
+            yield Button('Commit', id='commit')
+            yield Button('Cancel', id='cancel')
+
+    def clear(self) -> None:
+        ''' Clear the widgets '''
+        widgets = self.query(self.RowEdit)
+        if widgets:
+            widgets.remove()
+
+    def startrow(self, tablename: str, columnnames: Sequence[str]) -> None:
+        ''' Add widgets for entering a database row '''
+        self.query_one('#tablename', Label).update(tablename)
+        self.styles.visibility = 'visible'
+        self.clear()
+        for column in columnnames:
+            widget = self.RowEdit(column, '')
+            self.query_one('#widgetcontainer').mount(widget)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        ''' A button was pressed. Commit the change or cancel. '''
+        if event.button.id == 'cancel':
+            self.styles.visibility = 'hidden'
+        else:
+            self.accept()
+            self.styles.visibility = 'hidden'
+
+    def on_key(self, event: events.Key) -> None:
+        ''' Key was pressed '''
+        if event.key == 'escape':
+            self.styles.visibility = 'hidden'
+
+    def accept(self):
+        ''' Accept the new row '''
+        tablename = str(self.query_one('#tablename', Label).renderable)
+        values = {}
+        for rowedit in self.query(self.RowEdit):
+            key = str(rowedit.query_one('#roweditlabel', Label).renderable)
+            value = str(rowedit.query_one('#roweditvalue', Input).value)
+            if value:
+                values[key] = value
+        self.post_message(self.InsertRow(tablename, values))
+
+
 class SqliteViewer(App):
     ''' Main SQLite Viewer App '''
     CSS_PATH = 'sqliteview.css'
-    SCREENS = {"opendb": OpenDb()}
+    SCREENS = {'opendb': OpenDb()}
     BINDINGS = [Binding("o", "push_screen('opendb')", "Open Database"),
                 Binding("d", "toggle_dark", "Toggle dark mode")]
 
@@ -257,6 +342,7 @@ class SqliteViewer(App):
             with Vertical(id='query'):
                 yield Input(placeholder='SELECT * FROM ?', id='queryinput')
                 yield DataTable(id='queryoutput')
+        yield InsertEditor(id='insertrow')
         yield FieldEditor(id='fieldedit')
         yield Footer()
 
@@ -289,7 +375,7 @@ class SqliteViewer(App):
             except NoMatches:
                 pass  # ContentSwitcher won't exist yet during initialization
 
-    def action_edit_field(self):
+    def action_edit_field(self) -> None:
         ''' Edit of the field was requested. Show edit popup. '''
         if self.currenttable and self.currenttable not in self.database.views:
             table = self.query_one('#dbtable', DbTableEdit)
@@ -302,6 +388,12 @@ class SqliteViewer(App):
                                       table.cursor_coordinate)
             editbox = self.query_one('#fieldedit', FieldEditor)
             editbox.startedit(tableinfo)
+
+    def action_insert_row(self) -> None:
+        if self.currenttable and self.currenttable not in self.database.views:
+            table = self.query_one('#dbtable', DbTableEdit)
+            insertbox = self.query_one('#insertrow', InsertEditor)
+            insertbox.startrow(self.currenttable, table.column_names)
 
     def on_field_editor_change_field(self, message: FieldEditor.ChangeField) -> None:
         ''' Field editor is done editing '''
@@ -318,6 +410,19 @@ class SqliteViewer(App):
         else:
             table.update_cell_at(coordinate, new_value, update_width=True)
         table.focus()
+
+    def on_insert_editor_insert_row(self, message: InsertEditor.InsertRow) -> None:
+        ''' Insert Row editor has a row to insert '''
+        try:
+            self.database.insert(message.tablename, message.values)
+        except sqlite3.Error:
+            pass  # TODO: show error message
+        else:
+            columns, rows = self.database.table_data(self.currenttable)
+            table = self.query_one('#dbtable', DbTableEdit)
+            table.clear(columns=True)
+            table.add_columns(*columns)
+            table.add_rows(rows)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''

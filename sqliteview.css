@@ -38,22 +38,33 @@ DataTable {
     margin-top: 2;
 }
 
-#notadatabase {
-    margin-left: 2;
-    padding-top: 1;
-    padding-bottom: 1;
-    padding-left: 2;
-    padding-right: 2;
-    background: $error;
-    color: white;
-    visibility: hidden;
-}
-
-#fieldedit {
-    width: 70%;
-    height: 40%;
-    align: center middle;
+FieldEditor {
+    dock: bottom;
+    width: 100%;
+    height: 50%;
     layer: top;
     border: solid;
     visibility: hidden;
+}
+
+InsertEditor {
+    dock: bottom;
+    width: 100%;
+    height: 70%;
+    layer: top;
+    border: solid red;
+    visibility: hidden;
+}
+
+RowEdit {
+    height: 3;
+    width: 80%;
+}
+#roweditlabel {
+    margin-left: 2;
+    margin-top: 1;
+}
+#roweditvalue {
+    height: 3;
+    margin-left: 2;
 }
