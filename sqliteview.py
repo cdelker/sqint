@@ -6,7 +6,9 @@ import sqlite3
 from typing import Sequence
 
 from textual import events
-from textual.app import App, ComposeResult, NoMatches, Binding
+from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
+from textual.binding import Binding
 from textual.widgets import (Button,
                              ContentSwitcher,
                              DirectoryTree,
@@ -48,14 +50,16 @@ class Database:
     def query(self, query: str, args: Sequence[str] = None) -> tuple[list[str], list[list[str]]]:
         ''' Query the database '''
         args = () if args is None else args
+        columns: list[str] = []
+        rows: list[list[str]] = [[]]
         try:
             cursor = self.connection.execute(query, args)
         except AttributeError:
-            columns: list[str] = []
-            rows: list[list[str]] = [[]]
+            pass
         else:
-            columns = [col[0] for col in cursor.description]
-            rows = [[str(col) for col in row] for row in cursor.fetchall()]
+            if cursor.description:
+                columns = [col[0] for col in cursor.description]
+                rows = [[str(col) for col in row] for row in cursor.fetchall()]
         return columns, rows
 
     def table_info(self, name: str) -> tuple[list[str], list[list[str]]]:
@@ -65,14 +69,21 @@ class Database:
 
     def table_data(self, name: str) -> tuple[list[str], list[list[str]]]:
         ''' Get column names and row data from table '''
-        columns, rows = self.query(f'SELECT * FROM {name}')
+        primary_keys = self.primary_keys(name)
+        if primary_keys[0] == 'rowid':
+            columns, rows = self.query(f'SELECT rowid, * FROM {name}')
+        else:
+            columns, rows = self.query(f'SELECT * FROM {name}')
         return columns, rows
 
     def primary_keys(self, name: str) -> list[str]:
         ''' Get primary key columns for a table '''
         _, rows = self.query(
             f'SELECT l.name FROM pragma_table_info("{name}") as l WHERE l.pk = 1;')
-        return [r[0] for r in rows]
+        rows = [r[0] for r in rows]
+        if not rows:
+            rows = ['rowid']
+        return rows
 
     def update(self, tablename: str, colunmname: str, value: str, where: dict = None) -> None:
         ''' Update a single field in the database '''
