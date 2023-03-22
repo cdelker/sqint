@@ -4,7 +4,7 @@ import os
 import sys
 import sqlite3
 from collections import namedtuple
-from typing import Sequence
+from typing import Sequence, Optional
 
 from textual import events
 from textual.app import App, ComposeResult
@@ -301,9 +301,9 @@ class InsertEditor(Static):
         self.post_message(self.InsertRow(tablename, values))
 
 
-class SqliteViewer(App):
+class Sqint(App):
     ''' Main SQLite Viewer App '''
-    CSS_PATH = 'sqliteview.css'
+    CSS_PATH = 'sqint.css'
     SCREENS = {'opendb': OpenDb()}
     BINDINGS = [Binding("o", "push_screen('opendb')", "Open Database"),
                 Binding("d", "toggle_dark", "Toggle dark mode")]
@@ -312,7 +312,7 @@ class SqliteViewer(App):
         super().__init__()
         self.database = Database()
         self.dbpath = dbpath
-        self.currenttable = None
+        self.currenttable: Optional[str] = None
 
     def on_mount(self) -> None:
         ''' Load the database when mounted '''
@@ -418,11 +418,12 @@ class SqliteViewer(App):
         except sqlite3.Error:
             pass  # TODO: show error message
         else:
-            columns, rows = self.database.table_data(self.currenttable)
-            table = self.query_one('#dbtable', DbTableEdit)
-            table.clear(columns=True)
-            table.add_columns(*columns)
-            table.add_rows(rows)
+            if self.currenttable:
+                columns, rows = self.database.table_data(self.currenttable)
+                table = self.query_one('#dbtable', DbTableEdit)
+                table.clear(columns=True)
+                table.add_columns(*columns)
+                table.add_rows(rows)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
@@ -449,11 +450,15 @@ class SqliteViewer(App):
             self.push_screen('opendb')
 
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) <= 1:
         dbpath = None
     else:
         dbpath = sys.argv[1]
 
-    app = SqliteViewer(dbpath)
+    app = Sqint(dbpath)
     app.run()
+
+
+if __name__ == "__main__":
+    main()
