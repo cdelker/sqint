@@ -6,6 +6,7 @@ import sqlite3
 from collections import namedtuple
 from typing import Sequence, Optional
 
+from rich.markup import escape
 from textual import events
 from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
@@ -29,6 +30,18 @@ from textual.coordinate import Coordinate
 
 
 TableEditInfo = namedtuple('TableEditInfo', 'value column tablename conditions coordinate')
+
+
+def sanitize_table(rows: Sequence[Sequence[str]], limit: int = 40) -> list[list[str]]:
+    ''' Limit table rows to a certain length and escape any markup. '''
+    rows = [[col[:limit-3]+'...' if len(col) > limit else col for col in row] for row in rows]
+    rows = [[escape(col) for col in row] for row in rows]
+    return rows
+
+
+def escape_identifier(name: str):
+    ''' SQLite can have quotes in table names. This escapes them. '''
+    return "\"" + name.replace("\"", "\"\"") + "\""
 
 
 class Database:
@@ -66,24 +79,34 @@ class Database:
                 rows = [[str(col) for col in row] for row in cursor.fetchall()]
         return columns, rows
 
+    def query_single(self, tablename: str, column: str, conditions: dict = None):
+        ''' Get single field from a table '''
+        args = None
+        query = f'SELECT {escape_identifier(column)} from {escape_identifier(tablename)} '
+        if conditions:
+            query += 'where ' + ' and '.join(f'{key}=?' for key in conditions.keys())
+            args = tuple(conditions.values())
+        _, rows = self.query(query, args)
+        return rows[0][0]
+
     def table_info(self, name: str) -> tuple[list[str], list[list[str]]]:
         ''' Get table info '''
-        columns, info = self.query(f'PRAGMA table_info({name});')
+        columns, info = self.query(f'PRAGMA table_info({escape_identifier(name)});')
         return columns, info
 
     def table_data(self, name: str) -> tuple[list[str], list[list[str]]]:
         ''' Get column names and row data from table '''
         primary_keys = self.primary_keys(name)
         if not name in self.views and primary_keys[0] == 'rowid':
-            columns, rows = self.query(f'SELECT rowid, * FROM {name}')
+            columns, rows = self.query(f'SELECT rowid, * FROM {escape_identifier(name)}')
         else:
-            columns, rows = self.query(f'SELECT * FROM {name}')
+            columns, rows = self.query(f'SELECT * FROM {escape_identifier(name)}')
         return columns, rows
 
     def primary_keys(self, name: str) -> list[str]:
         ''' Get primary key columns for a table '''
         _, rows = self.query(
-            f'SELECT l.name FROM pragma_table_info("{name}") as l WHERE l.pk = 1;')
+            f'SELECT l.name FROM pragma_table_info({escape_identifier(name)}) as l WHERE l.pk = 1;')
         rowstrs = [r[0] for r in rows]
         if not rowstrs:
             rowstrs = ['rowid']
@@ -92,7 +115,7 @@ class Database:
     def update(self, tablename: str, colunmname: str, value: str, where: dict = None) -> None:
         ''' Update a single field in the database '''
         args = [value]
-        sql = f'UPDATE {tablename} SET {colunmname}=? '
+        sql = f'UPDATE {escape_identifier(tablename)} SET {escape_identifier(colunmname)}=? '
         if where:
             searchstrs = ' and '.join(f'{pk}=?' for pk in where.keys())
             sql += ' WHERE ' + searchstrs
@@ -101,11 +124,14 @@ class Database:
         self.connection.commit()
 
     def insert(self, tablename: str, values: dict[str, str]) -> None:
-        colstr = ','.join(values.keys())
+        ''' Insert a new row into the table '''
+        colstr = ','.join(escape_identifier(v) for v in values.keys())
         qs = ','.join('?'*len(values))
-        sql = f'INSERT INTO {tablename} ({colstr}) VALUES({qs})'
+        sql = (f'INSERT INTO {escape_identifier(tablename)} '
+               f'({colstr}) VALUES({qs})')
         self.connection.execute(sql, list(values.values()))
         self.connection.commit()
+
 
 class OpenDb(Screen):
     ''' Screen for selecting a database file '''
@@ -354,13 +380,13 @@ class Sqint(App):
             table = self.query_one('#dbtable', DbTableEdit)
             table.clear(columns=True)
             table.add_columns(*columns)
-            table.add_rows(rows)
+            table.add_rows(sanitize_table(rows))
 
             infotable = self.query_one('#infotable', DataTable)
             infotable.clear(columns=True)
             columns, info = self.database.table_info(str(message.node.label))
             infotable.add_columns(*columns)
-            infotable.add_rows(info)
+            infotable.add_rows(sanitize_table(info))
 
             contentswitcher = self.query_one(ContentSwitcher)
             if contentswitcher.current == 'query':
@@ -381,7 +407,8 @@ class Sqint(App):
             table = self.query_one('#dbtable', DbTableEdit)
             primary_keys = self.database.primary_keys(self.currenttable)
             conditions = table.current_row_values(*primary_keys)
-            tableinfo = TableEditInfo(table.current_value,
+            current_value = self.database.query_single(self.currenttable, table.current_column, conditions)
+            tableinfo = TableEditInfo(current_value,
                                       table.current_column,
                                       self.currenttable,
                                       conditions,
@@ -423,7 +450,7 @@ class Sqint(App):
                 table = self.query_one('#dbtable', DbTableEdit)
                 table.clear(columns=True)
                 table.add_columns(*columns)
-                table.add_rows(rows)
+                table.add_rows(sanitize_table(rows))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
@@ -437,7 +464,7 @@ class Sqint(App):
             result = [[str(err)]]
 
         table.add_columns(*columns)
-        table.add_rows(result)
+        table.add_rows(sanitize_table(result))
 
     def action_toggle_dark(self) -> None:
         ''' Dark mode '''
