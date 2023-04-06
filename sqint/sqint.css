@@ -1,7 +1,31 @@
 Screen {
-    align: center middle;
+    align: center top;
     overflow-x: auto;
-    layers: bottom top;
+}
+
+ModalScreen {
+    align: center middle;
+}
+
+#dialog {
+    padding: 0 1;
+    width: 60;
+    height: 11;
+    border: thick $background 80%;
+    background: $surface;
+}
+
+#insertdialog {
+    padding: 0 1;
+    width: 60;
+    height: 40;
+    border: thick $background 80%;
+    background: $surface;
+}
+
+TabbedContent {
+    height: 100%;
+    overflow-y: hidden;
 }
 
 Button {
@@ -9,12 +33,6 @@ Button {
     margin-left: 1;
 }
 
-ContentSwitcher {
-    background: $panel;
-    border: round $primary;
-    width: 100%;
-    height: 90%;
-}
 
 #dbtree {
     dock: left;
@@ -36,24 +54,6 @@ DataTable {
 #openlabel {
     margin-left: 3;
     margin-top: 2;
-}
-
-FieldEditor {
-    dock: bottom;
-    width: 100%;
-    height: 50%;
-    layer: top;
-    border: solid;
-    visibility: hidden;
-}
-
-InsertEditor {
-    dock: bottom;
-    width: 100%;
-    height: 70%;
-    layer: top;
-    border: solid red;
-    visibility: hidden;
 }
 
 RowEdit {

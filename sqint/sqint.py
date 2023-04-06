@@ -3,13 +3,13 @@
 import os
 import sys
 import sqlite3
+import asyncio
 from collections import namedtuple
 from typing import Sequence, Optional
 
 from rich.markup import escape
 from textual import events
 from textual.app import App, ComposeResult
-from textual.css.query import NoMatches
 from textual.binding import Binding
 from textual.widgets import (Button,
                              ContentSwitcher,
@@ -19,12 +19,12 @@ from textual.widgets import (Button,
                              Header,
                              Input,
                              Label,
-                             Tab,
-                             Tabs,
+                             TabbedContent,
+                             TabPane,
                              Tree,
                              Static)
-from textual.screen import Screen
-from textual.containers import Container, Horizontal, Vertical
+from textual.screen import Screen, ModalScreen
+from textual.containers import Container, Horizontal, Grid, Vertical
 from textual.message import Message
 from textual.coordinate import Coordinate
 
@@ -32,7 +32,7 @@ from textual.coordinate import Coordinate
 TableEditInfo = namedtuple('TableEditInfo', 'value column tablename conditions coordinate')
 
 
-def sanitize_table(rows: Sequence[Sequence[str]], limit: int = 40) -> list[list[str]]:
+def sanitize_table(rows: Sequence[Sequence[str]], limit: int = 40) -> Sequence[Sequence[str]]:
     ''' Limit table rows to a certain length and escape any markup. '''
     rows = [[col[:limit-3]+'...' if len(col) > limit else col for col in row] for row in rows]
     rows = [[escape(col) for col in row] for row in rows]
@@ -202,8 +202,9 @@ class DbTableEdit(DataTable):
         return dict(zip(columns, col_values))
 
 
-class FieldEditor(Static):
+class FieldEditor(ModalScreen):
     ''' Popup Widget for editing a single field in a table '''
+    BINDINGS = [Binding("escape", "app.pop_screen()", "Close")]
 
     class ChangeField(Message):
         ''' Message to notify that the field should be changed '''
@@ -213,16 +214,16 @@ class FieldEditor(Static):
             super().__init__()
 
     def compose(self) -> ComposeResult:
-        yield Label('Edit me!', id='fieldname')
-        yield Input(id='fieldinput')
-        with Horizontal():
-            yield Button('Commit', id='commit')
-            yield Button('Cancel', id='cancel')
+        with Vertical(id='dialog'):
+            yield Label('Value', id='fieldname')
+            yield Input(id='fieldinput')
+            with Horizontal():
+                yield Button('Commit', id='commit')
+                yield Button('Cancel', id='cancel')
 
-    def startedit(self, editinfo: TableEditInfo) -> None:
+    async def startedit(self, editinfo: TableEditInfo) -> None:
         ''' Start editing the field '''
         self.editinfo = editinfo
-        self.styles.visibility = 'visible'
         fieldname = self.query_one('#fieldname', Label)
         fieldname.update(editinfo.column)
         value = self.query_one('#fieldinput', Input)
@@ -231,29 +232,37 @@ class FieldEditor(Static):
         value.insert_text_at_cursor(editinfo.value)
         value.focus()
 
+    def on_field_editor_start_edit(self, message):
+        self.editinfo = message.editinfo
+        fieldname = self.query_one('#fieldname', Label)
+        fieldname.update(self.editinfo.column)
+        value = self.query_one('#fieldinput', Input)
+        value.action_end()
+        value.action_delete_left_all()
+        value.insert_text_at_cursor(self.editinfo.value)
+        value.focus()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' Enter was pressed in the Input. Commit the change. '''
+        self.app.pop_screen()
         self.post_message(self.ChangeField(event.value, self.editinfo))
-        self.styles.visibility = 'hidden'
         event.stop()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         ''' A button was pressed. Commit the change or cancel. '''
         if event.button.id == 'cancel':
-            self.styles.visibility = 'hidden'
-        else:
+            event.stop()
+            self.app.pop_screen()
+
+        elif event.button.id == 'commit':
             value = self.query_one('#fieldinput', Input).value
             self.post_message(self.ChangeField(value, self.editinfo))
-            self.styles.visibility = 'hidden'
-
-    def on_key(self, event: events.Key) -> None:
-        ''' Key was pressed '''
-        if event.key == 'escape':
-            self.styles.visibility = 'hidden'
+            self.app.pop_screen()
 
 
-class InsertEditor(Static):
+class InsertEditor(ModalScreen):
     ''' Screen for inserting an entire row into a table '''
+    BINDINGS = [Binding("escape", "app.pop_screen", "Pop screen")]
 
     class InsertRow(Message):
         ''' Message to notify that a row should be inserted '''
@@ -281,11 +290,12 @@ class InsertEditor(Static):
             return str(inpt.value)
 
     def compose(self) -> ComposeResult:
-        yield Label('Table Name', id='tablename')
-        yield Container(id='widgetcontainer')
-        with Horizontal():
-            yield Button('Commit', id='commit')
-            yield Button('Cancel', id='cancel')
+        with Vertical(id='insertdialog'):
+            yield Label(id='tablename')
+            yield Container(id='widgetcontainer')
+            with Horizontal():
+                yield Button('Commit', id='commit')
+                yield Button('Cancel', id='cancel')
 
     def clear(self) -> None:
         ''' Clear the widgets '''
@@ -293,10 +303,9 @@ class InsertEditor(Static):
         if widgets:
             widgets.remove()
 
-    def startrow(self, tablename: str, columnnames: Sequence[str]) -> None:
+    async def startedit(self, tablename: str, columnnames: Sequence[str]) -> None:
         ''' Add widgets for entering a database row '''
         self.query_one('#tablename', Label).update(tablename)
-        self.styles.visibility = 'visible'
         self.clear()
         for column in columnnames:
             widget = self.RowEdit(column, '')
@@ -305,15 +314,9 @@ class InsertEditor(Static):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         ''' A button was pressed. Commit the change or cancel. '''
         if event.button.id == 'cancel':
-            self.styles.visibility = 'hidden'
+            self.app.pop_screen()
         else:
             self.accept()
-            self.styles.visibility = 'hidden'
-
-    def on_key(self, event: events.Key) -> None:
-        ''' Key was pressed '''
-        if event.key == 'escape':
-            self.styles.visibility = 'hidden'
 
     def accept(self):
         ''' Accept the new row '''
@@ -325,12 +328,15 @@ class InsertEditor(Static):
             if value:
                 values[key] = value
         self.post_message(self.InsertRow(tablename, values))
+        self.app.pop_screen()
 
 
 class Sqint(App):
     ''' Main SQLite Viewer App '''
     CSS_PATH = 'sqint.css'
-    SCREENS = {'opendb': OpenDb()}
+    SCREENS = {'opendb': OpenDb(),
+               'editfield': FieldEditor(),
+               'insertrow': InsertEditor()}
     BINDINGS = [Binding("o", "push_screen('opendb')", "Open Database"),
                 Binding("d", "toggle_dark", "Toggle dark mode")]
 
@@ -357,19 +363,14 @@ class Sqint(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DbTreeWidget('database', id='dbtree')
-        yield Tabs(
-            Tab('Contents', id='dbtable_tab'),
-            Tab('Table Info', id='infotable_tab'),
-            Tab('Query', id='query_tab'))
-
-        with ContentSwitcher(initial='dbtable'):
-            yield DbTableEdit(id='dbtable')
-            yield DataTable(id='infotable')
-            with Vertical(id='query'):
+        with TabbedContent():
+            with TabPane('Contents', id='tab_contents'):
+                yield DbTableEdit(id='dbtable')
+            with TabPane('Table Info', id='tab_info'):
+                yield DataTable(id='infotable')
+            with TabPane('Query', id='tab_query'):
                 yield Input(placeholder='SELECT * FROM ?', id='queryinput')
                 yield DataTable(id='queryoutput')
-        yield InsertEditor(id='insertrow')
-        yield FieldEditor(id='fieldedit')
         yield Footer()
 
     def on_tree_node_selected(self, message: Tree.NodeSelected) -> None:
@@ -392,16 +393,7 @@ class Sqint(App):
             if contentswitcher.current == 'query':
                 contentswitcher.current = 'dbtable'
 
-    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
-        ''' Tab was changed '''
-        if event.tab.id:
-            tabid = event.tab.id.split('_')[0]
-            try:
-                self.query_one(ContentSwitcher).current = tabid
-            except NoMatches:
-                pass  # ContentSwitcher won't exist yet during initialization
-
-    def action_edit_field(self) -> None:
+    async def action_edit_field(self) -> None:
         ''' Edit of the field was requested. Show edit popup. '''
         if self.currenttable and self.currenttable not in self.database.views:
             table = self.query_one('#dbtable', DbTableEdit)
@@ -413,14 +405,16 @@ class Sqint(App):
                                       self.currenttable,
                                       conditions,
                                       table.cursor_coordinate)
-            editbox = self.query_one('#fieldedit', FieldEditor)
-            editbox.startedit(tableinfo)
+            self.push_screen('editfield')
+            screen = self.SCREENS['editfield']
+            await asyncio.create_task(screen.startedit(tableinfo))
 
-    def action_insert_row(self) -> None:
+    async def action_insert_row(self) -> None:
         if self.currenttable and self.currenttable not in self.database.views:
             table = self.query_one('#dbtable', DbTableEdit)
-            insertbox = self.query_one('#insertrow', InsertEditor)
-            insertbox.startrow(self.currenttable, table.column_names)
+            self.push_screen('insertrow')
+            screen = self.SCREENS['insertrow']
+            await asyncio.create_task(screen.startedit(self.currenttable, table.column_names))
 
     def on_field_editor_change_field(self, message: FieldEditor.ChangeField) -> None:
         ''' Field editor is done editing '''
@@ -451,6 +445,7 @@ class Sqint(App):
                 table.clear(columns=True)
                 table.add_columns(*columns)
                 table.add_rows(sanitize_table(rows))
+                table.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
