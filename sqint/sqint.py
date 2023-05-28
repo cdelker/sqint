@@ -5,10 +5,11 @@ import sys
 import sqlite3
 import asyncio
 from collections import namedtuple
-from typing import Sequence, Optional
+from pathlib import Path
+from typing import Optional, Iterable, Sequence
 
 from rich.markup import escape
-from textual import events
+from textual.css.query import NoMatches
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import (Button,
@@ -24,15 +25,16 @@ from textual.widgets import (Button,
                              Tree,
                              Static)
 from textual.screen import Screen, ModalScreen
-from textual.containers import Container, Horizontal, Grid, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
 from textual.coordinate import Coordinate
 
 
+SQLITE_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.db3', '.s3db', '.sl3']
 TableEditInfo = namedtuple('TableEditInfo', 'value column tablename conditions coordinate')
 
 
-def sanitize_table(rows: Sequence[Sequence[str]], limit: int = 40) -> Sequence[Sequence[str]]:
+def sanitize_table(rows: Iterable[Iterable[str]], limit: int = 40) -> Iterable[Iterable[str]]:
     ''' Limit table rows to a certain length and escape any markup. '''
     rows = [[col[:limit-3]+'...' if len(col) > limit else col for col in row] for row in rows]
     rows = [[escape(col) for col in row] for row in rows]
@@ -47,7 +49,7 @@ def escape_identifier(name: str):
 class Database:
     ''' The Sqlite Database '''
 
-    def load(self, path: str) -> bool:
+    def load(self, path: Path) -> bool:
         ''' Load database from path. Return True if successful. '''
         try:
             self.connection = sqlite3.connect(path)
@@ -97,7 +99,7 @@ class Database:
     def table_data(self, name: str) -> tuple[list[str], list[list[str]]]:
         ''' Get column names and row data from table '''
         primary_keys = self.primary_keys(name)
-        if not name in self.views and primary_keys[0] == 'rowid':
+        if name not in self.views and primary_keys[0] == 'rowid':
             columns, rows = self.query(f'SELECT rowid, * FROM {escape_identifier(name)}')
         else:
             columns, rows = self.query(f'SELECT * FROM {escape_identifier(name)}')
@@ -133,19 +135,25 @@ class Database:
         self.connection.commit()
 
 
+class SqliteDirectoryTree(DirectoryTree):
+    ''' Textual DirectoryTree with sqlite file filter '''
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [path for path in paths if path.is_dir() or path.suffix.lower() in SQLITE_EXTENSIONS]
+
+
 class OpenDb(Screen):
     ''' Screen for selecting a database file '''
     BINDINGS = [Binding("escape", "app.pop_screen", "Pop screen")]
 
     class Fileopen(Message):
         ''' Message to notify that a database should be loaded '''
-        def __init__(self, path: str) -> None:
+        def __init__(self, path: Path) -> None:
             self.path = path
             super().__init__()
 
     def compose(self) -> ComposeResult:
         yield Label('Select Database to Open', id='openlabel')
-        yield DirectoryTree(os.path.expanduser('~'), id='opentree')
+        yield SqliteDirectoryTree(os.path.expanduser('~'), id='opentree')
         yield Button('Open', id='openbutton')
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -303,7 +311,7 @@ class InsertEditor(ModalScreen):
         if widgets:
             widgets.remove()
 
-    async def startedit(self, tablename: str, columnnames: Sequence[str]) -> None:
+    async def startedit(self, tablename: str, columnnames: Iterable[str]) -> None:
         ''' Add widgets for entering a database row '''
         self.query_one('#tablename', Label).update(tablename)
         self.clear()
@@ -349,11 +357,11 @@ class Sqint(App):
     def on_mount(self) -> None:
         ''' Load the database when mounted '''
         if self.dbpath:
-            self.load_database(self.dbpath)
+            self.load_database(Path(self.dbpath))
         else:
             self.push_screen('opendb')
 
-    def load_database(self, path: str) -> bool:
+    def load_database(self, path: Path) -> bool:
         ''' Load database info into widgets. Return True on success '''
         loaded = self.database.load(path)
         if loaded:
@@ -399,7 +407,8 @@ class Sqint(App):
             table = self.query_one('#dbtable', DbTableEdit)
             primary_keys = self.database.primary_keys(self.currenttable)
             conditions = table.current_row_values(*primary_keys)
-            current_value = self.database.query_single(self.currenttable, table.current_column, conditions)
+            current_value = self.database.query_single(
+                self.currenttable, table.current_column, conditions)
             tableinfo = TableEditInfo(current_value,
                                       table.current_column,
                                       self.currenttable,
@@ -407,14 +416,16 @@ class Sqint(App):
                                       table.cursor_coordinate)
             self.push_screen('editfield')
             screen = self.SCREENS['editfield']
-            await asyncio.create_task(screen.startedit(tableinfo))
+            await asyncio.create_task(screen.startedit(tableinfo))  # type: ignore
 
     async def action_insert_row(self) -> None:
+        ''' Show the Insert Row screen '''
         if self.currenttable and self.currenttable not in self.database.views:
             table = self.query_one('#dbtable', DbTableEdit)
             self.push_screen('insertrow')
             screen = self.SCREENS['insertrow']
-            await asyncio.create_task(screen.startedit(self.currenttable, table.column_names))
+            await asyncio.create_task(
+                screen.startedit(self.currenttable, table.column_names))  # type: ignore
 
     def on_field_editor_change_field(self, message: FieldEditor.ChangeField) -> None:
         ''' Field editor is done editing '''
@@ -449,7 +460,11 @@ class Sqint(App):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         ''' The SQL query was submitted '''
-        table = self.query_one('#queryoutput', DataTable)
+        try:
+            table = self.query_one('#queryoutput', DataTable)
+        except NoMatches:
+            return
+
         query = event.value
         table.clear(columns=True)
         try:
