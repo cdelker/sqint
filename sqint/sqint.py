@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Iterable, Sequence
 
 from rich.markup import escape
+from textual import on
 from textual.css.query import NoMatches
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -156,7 +157,8 @@ class OpenDb(Screen):
         yield SqliteDirectoryTree(os.path.expanduser('~'), id='opentree')
         yield Button('Open', id='openbutton')
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    @on(Button.Pressed, '#openbutton')
+    def openbutton(self, event: Button.Pressed) -> None:
         ''' The Open button was pressed '''
         tree = self.query_one('#opentree', DirectoryTree)
         if tree.cursor_node and tree.cursor_node.data:
@@ -256,16 +258,18 @@ class FieldEditor(ModalScreen):
         self.post_message(self.ChangeField(event.value, self.editinfo))
         event.stop()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        ''' A button was pressed. Commit the change or cancel. '''
-        if event.button.id == 'cancel':
-            event.stop()
-            self.app.pop_screen()
+    @on(Button.Pressed, '#cancel')
+    def cancel(self, event: Button.Pressed) -> None:
+        ''' Cancel the dialog '''
+        event.stop()
+        self.app.pop_screen()
 
-        elif event.button.id == 'commit':
-            value = self.query_one('#fieldinput', Input).value
-            self.post_message(self.ChangeField(value, self.editinfo))
-            self.app.pop_screen()
+    @on(Button.Pressed, '#commit')
+    def commit(self) -> None:
+        ''' Commit the change '''
+        value = self.query_one('#fieldinput', Input).value
+        self.post_message(self.ChangeField(value, self.editinfo))
+        self.app.pop_screen()
 
 
 class InsertEditor(ModalScreen):
@@ -319,13 +323,12 @@ class InsertEditor(ModalScreen):
             widget = self.RowEdit(column, '')
             self.query_one('#widgetcontainer').mount(widget)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        ''' A button was pressed. Commit the change or cancel. '''
-        if event.button.id == 'cancel':
-            self.app.pop_screen()
-        else:
-            self.accept()
+    @on(Button.Pressed, '#cancel')
+    def cancel(self):
+        ''' Cancel the dialog. '''
+        self.app.pop_screen()
 
+    @on(Button.Pressed, '#commit')
     def accept(self):
         ''' Accept the new row '''
         tablename = str(self.query_one('#tablename', Label).renderable)
