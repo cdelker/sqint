@@ -23,16 +23,15 @@ ModalScreen {
     background: $surface;
 }
 
-TabbedContent {
-    height: 100%;
+TabbedContent ContentSwitcher {
     overflow-y: hidden;
+    height: 1fr;
 }
 
 Button {
     margin-right: 1;
     margin-left: 1;
 }
-
 
 #dbtree {
     dock: left;
@@ -43,6 +42,7 @@ Button {
 DataTable {
     padding-left: 1;
     padding-right: 1;
+    height: 1fr;
 }
 
 #opentree {
